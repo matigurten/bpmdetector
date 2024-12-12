@@ -8,6 +8,16 @@ import simpleaudio as sa
 import time
 import threading
 import argparse
+from scipy import stats
+
+# Define constants for BPM limits and frequency analysis
+MIN_BPM = 80   # Minimum BPM for x-axis
+MAX_BPM = 200  # Maximum BPM for x-axis
+SAMPLE_RATE = 1000  # Sampling rate in Hz for better resolution
+
+# Define the data directory relative to the script's location
+data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data')
+os.makedirs(data_dir, exist_ok=True)  # Create the data directory if it doesn't exist
 
 def download_youtube_audio(url, keep_original=False):
     print("Starting download...")
@@ -18,13 +28,13 @@ def download_youtube_audio(url, keep_original=False):
             'preferredcodec': 'wav',  # Save as WAV for better compatibility with librosa
             'preferredquality': '192',
         }],
-        'outtmpl': '%(title)s.%(ext)s',  # Output filename template using video title
+        'outtmpl': os.path.join(data_dir, '%(title)s.%(ext)s'),  # Save in data directory
     }
 
     info_dict = yt_dlp.YoutubeDL().extract_info(url, download=False)
     title = info_dict.get('title', None)
-    audio_file_wav = f"{title}.wav"
-    audio_file_mp3 = f"{title}.mp3"
+    audio_file_wav = os.path.join(data_dir, f"{title}.wav")
+    audio_file_mp3 = os.path.join(data_dir, f"{title}.mp3")
 
     if os.path.exists(audio_file_wav):
         print(f"File '{audio_file_wav}' already exists. Skipping download.")
@@ -66,7 +76,7 @@ def calculate_bpm(y, sr, beat_frames):
     for i in range(len(beat_times) - 1):
         bpm_value = (60 / (beat_times[i + 1] - beat_times[i]))  # Calculate BPM between beats
 
-        if bpm_value > 0 and 110 <= bpm_value <= 160:  # Only consider BPM values within range
+        if bpm_value > 0 and MIN_BPM <= bpm_value <= MAX_BPM:  # Only consider BPM values within range
             if not bpm_values or bpm_value != bpm_values[-1]:  # Store only if it changes
                 bpm_values.append(bpm_value)
 
@@ -99,33 +109,40 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
     plt.xticks(ticks=np.arange(0, duration + 1, step=30),
                labels=[f"{int(i // 60):02}:{int(i % 60):02}" for i in np.arange(0, duration + 1, step=30)])
 
-    plt.ylim(110, 160)  # Set y-limits based on specified range
+    plt.ylim(MIN_BPM, MAX_BPM)  # Set y-limits based on specified range
 
-    plt.yticks(np.arange(110, 165, step=5))  # Set y-ticks every 5 BPM
+    plt.yticks(np.arange(MIN_BPM, MAX_BPM + 5, step=5))  # Set y-ticks every 5 BPM
 
     # Save plots as an image file with the name of the audio file + "_waveform_bpm.jpg"
-    plot_filename = f"{os.path.splitext(audio_file)[0]}_waveform_bpm.jpg"
+    plot_filename = os.path.join(data_dir, f"{os.path.splitext(audio_file)[0]}_waveform_bpm.jpg")
     plt.savefig(plot_filename, format='jpg')
     print(f"Plots saved as '{plot_filename}'.")
 
     plt.close()
 
-def plot_fft(y):
-    """Plot FFT of the waveform."""
+def plot_fft(y, audio_file):
+    """Plot FFT of the waveform focusing on low frequencies (1-5 Hz)."""
     N = len(y)
     yf = np.fft.fft(y)
-    xf = np.fft.fftfreq(N, d=1/44100)[:N // 2]  # Assuming a sample rate of 44100 Hz
+    xf = np.fft.fftfreq(N, d=1/SAMPLE_RATE)[:N // 2]
 
     plt.figure(figsize=(12, 6))
-    plt.plot(xf[:N // 2], np.abs(yf[:N // 2]), color='b')  # Plot all frequencies
 
-    plt.title('Fourier Transform of Audio Waveform')
-    plt.xlabel('Frequency (Hz)')
+    # Convert frequencies to BPM (multiply by 60)
+    bpm_values = xf * 60
+
+    # Filter frequencies corresponding to desired BPM range (80-200 BPM)
+    indices = np.where((bpm_values >= MIN_BPM) & (bpm_values <= MAX_BPM))
+
+    plt.plot(bpm_values[indices], np.abs(yf[indices]), color='b')
+
+    plt.title('Fourier Transform of Audio Waveform (Converted to BPM)')
+    plt.xlabel('Frequency (BPM)')
     plt.ylabel('Amplitude')
 
-    plt.xlim(0, max(xf[:N // 2]))
+    plt.xlim(MIN_BPM, MAX_BPM)   # Limit x-axis to show frequencies between MIN_BPM and MAX_BPM
 
-    fft_filename = f"{os.path.splitext(audio_file)[0]}_fft.jpg"  # Updated filename format
+    fft_filename = os.path.join(data_dir, f"{os.path.splitext(audio_file)[0]}_fft.jpg")
     plt.savefig(fft_filename)
     print(f"FFT plot saved as '{fft_filename}'.")
 
@@ -138,11 +155,9 @@ def play_audio(file_path):
 
 def print_bpm_during_playback(beat_times, duration):
     start_time = time.time()
-    last_printed_bpm = None  # Variable to track the last printed BPM value
+    last_printed_bpm = None
 
-    print("Calculating BPM during playback...")
-
-    live_bpm_values = []  # List to store real-time BPM values
+    live_bpm_values = []
 
     while time.time() - start_time < duration:
         elapsed_time = time.time() - start_time
@@ -157,14 +172,38 @@ def print_bpm_during_playback(beat_times, duration):
 
             if time_interval > 0:
                 current_bpm = round((bpm_count / time_interval) * 60.0)
-                if current_bpm != last_printed_bpm:  # Only print when it changes
+                if current_bpm != last_printed_bpm:
                     print(f'Current BPM at {int(elapsed_time)}s: {current_bpm} BPM')
                     last_printed_bpm = current_bpm
                     live_bpm_values.append(current_bpm)
 
-        time.sleep(1)  # Sleep for one second
+        time.sleep(1)
 
     return live_bpm_values
+
+def main(url):
+    audio_file = download_youtube_audio(url)
+
+    try:
+        y, sr = librosa.load(audio_file)
+
+        plot_fft(y, audio_file)
+
+        beat_frames = analyze_audio(y, sr)
+
+        bpm_values = calculate_bpm(y,sr,beat_frames)
+
+        plot_waveform_and_bpm(y,sr,bpm_values,audio_file)
+
+        play_obj = play_audio(audio_file)
+        print("Playback started.")
+
+        live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), args.duration)
+
+        play_obj.wait_done()
+
+    finally:
+        pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze audio from YouTube or microphone.")
@@ -178,23 +217,4 @@ if __name__ == "__main__":
 
     url = args.url.strip()
 
-    audio_file = download_youtube_audio(url, not args.no_keep)
-
-    try:
-        y, sr = librosa.load(audio_file)
-        beat_frames = analyze_audio(y, sr)
-
-        bpm_values = calculate_bpm(y,sr,beat_frames)
-
-        plot_waveform_and_bpm(y,sr,bpm_values,audio_file)
-
-        live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), args.duration)
-
-        plot_fft(y)
-
-        play_obj = play_audio(audio_file)
-
-        play_obj.wait_done()
-
-    finally:
-        pass
+    main(url)
