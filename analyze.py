@@ -89,7 +89,7 @@ def calculate_bpm(y, sr, beat_frames):
 
     return np.array([])  # Return an empty array if no BPM values were calculated
 
-def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
+def plot_waveform_and_bpm(y, sr, bpm_values, audio_file, mode_value):
     plt.figure(figsize=(12, 6))
 
     duration = len(y) / sr
@@ -115,8 +115,8 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
 
     plt.yticks(np.arange(MIN_BPM_Y, MAX_BPM_Y + 5, step=5))  # Set y-ticks every 5 BPM
 
-    # Save plots as an image file with the name of the audio file + "_waveform_bpm.jpg"
-    plot_filename = os.path.join(data_dir, f"{os.path.splitext(audio_file)[0]}_waveform_bpm.jpg")
+    # Save plots as an image file with the name of the audio file + "_waveform_bpm_{mode_value}.jpg"
+    plot_filename = os.path.join(data_dir, f"{os.path.splitext(audio_file)[0]}_waveform_bpm_{int(mode_value)}.jpg")
     plt.savefig(plot_filename, format='jpg')
     print(f"Plots saved as '{plot_filename}'.")
 
@@ -220,7 +220,12 @@ def main(url):
 
         bpm_values = calculate_bpm(y,sr,beat_frames)
 
-        plot_waveform_and_bpm(y,sr,bpm_values,audio_file)
+        mode_value = stats.mode(bpm_values)[0] if len(bpm_values) > 0 else None
+
+        if mode_value is not None:
+            print(f'Mode of BPM values: {int(mode_value)}')
+
+        plot_waveform_and_bpm(y,sr,bpm_values,audio_file, mode_value)
 
         play_obj = play_audio(audio_file)
         print("Playback started.")
@@ -228,11 +233,6 @@ def main(url):
         live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), args.duration)
 
         play_obj.wait_done()
-
-        mode_value = stats.mode(bpm_values)[0][0] if len(bpm_values) > 0 else None
-
-        if mode_value is not None:
-            print(f'Mode of BPM values: {mode_value:.2f}')
 
         save_actual_bpm_plot(live_bpm_values, audio_file)
 
@@ -242,7 +242,7 @@ def main(url):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze audio from YouTube or microphone.")
 
-    parser.add_argument('--url', type=str, required=True, help="YouTube video URL")
+    parser.add_argument('--url', type=str, required=False, help="YouTube video URL")
     parser.add_argument('--no-keep', action='store_true', help="Do not keep downloaded files")
     parser.add_argument('--duration', type=int, default=10,
                         help="Duration of real-time analysis in seconds")
