@@ -9,6 +9,7 @@ import time
 import threading
 import argparse
 from scipy import stats
+import sounddevice as sd
 
 # Define constants for BPM limits and frequency analysis
 MIN_BPM_X = 80   # Minimum BPM for x-axis
@@ -182,7 +183,7 @@ def print_bpm_during_playback(beat_times, duration):
                     live_bpm_values.append(current_bpm)
         else:
             # Print every ten seconds even if there's no change
-            if current_time_seconds % 10 == 0 and current_time_seconds != last_printed_bpm:
+            if current_time_seconds % 10 == 0:
                 print(f'Current BPM at {current_time_seconds}s: {last_printed_bpm} (no change)')
 
         time.sleep(1)
@@ -208,33 +209,48 @@ def save_actual_bpm_plot(bpm_values, audio_file):
 
     plt.close()
 
-def main(url):
-    audio_file = download_youtube_audio(url)
-
-    try:
-        y, sr = librosa.load(audio_file)
-
-        plot_fft(y, audio_file)
-
-        beat_frames = analyze_audio(y, sr)
-
-        bpm_values = calculate_bpm(y,sr,beat_frames)
+def main(url=None):
+    if url is None:
+        print("No URL provided. Starting microphone recording...")
+        duration = int(input("Enter duration for recording (in seconds): "))
+        y_recorded_data , sr_recorded_data= record_from_microphone(duration=duration)
+        beat_frames = analyze_audio(y_recorded_data , sr_recorded_data )
+        bpm_values = calculate_bpm(y_recorded_data , sr_recorded_data , beat_frames)
 
         mode_value = stats.mode(bpm_values)[0] if len(bpm_values) > 0 else None
 
         if mode_value is not None:
             print(f'Mode of BPM values: {int(mode_value)}')
 
-        plot_waveform_and_bpm(y,sr,bpm_values,audio_file, mode_value)
+        save_actual_bpm_plot(bpm_values , "microphone_recording.wav")
+        return
+
+    audio_file = download_youtube_audio(url)
+
+    try:
+        y , sr = librosa.load(audio_file)
+
+        plot_fft(y , audio_file)
+
+        beat_frames = analyze_audio(y , sr)
+
+        bpm_values = calculate_bpm(y , sr , beat_frames)
+
+        mode_value = stats.mode(bpm_values)[0] if len(bpm_values) > 0 else None
+
+        if mode_value is not None:
+            print(f'Mode of BPM values: {int(mode_value)}')
+
+        plot_waveform_and_bpm(y , sr , bpm_values , audio_file , int(mode_value))
 
         play_obj = play_audio(audio_file)
         print("Playback started.")
 
-        live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), args.duration)
+        live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames , sr=sr), args.duration)
 
         play_obj.wait_done()
 
-        save_actual_bpm_plot(live_bpm_values, audio_file)
+        save_actual_bpm_plot(live_bpm_values , audio_file)
 
     finally:
         pass
@@ -242,13 +258,30 @@ def main(url):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze audio from YouTube or microphone.")
 
-    parser.add_argument('--url', type=str, required=False, help="YouTube video URL")
+    parser.add_argument('--url', type=str , help="YouTube video URL")
     parser.add_argument('--no-keep', action='store_true', help="Do not keep downloaded files")
-    parser.add_argument('--duration', type=int, default=10,
+    parser.add_argument('--duration', type=int , default=10,
                         help="Duration of real-time analysis in seconds")
 
     args = parser.parse_args()
 
-    url = args.url.strip()
+    url_input = args.url.strip() if args.url else None
 
-    main(url)
+    main(url_input)
+
+def record_from_microphone(duration=10):
+    """Record audio from the microphone."""
+    import sounddevice as sd
+
+    print("Recording from microphone...")
+
+    # Record audio from microphone
+    recording_data = sd.rec(int(duration * SAMPLE_RATE), samplerate=SAMPLE_RATE,
+                            channels=1, dtype='float64')
+
+    sd.wait()	# Wait until recording is finished
+
+    # Save recorded data as a WAV file (optional)
+    wav.write(os.path.join(data_dir,"microphone_recording.wav"), SAMPLE_RATE , recording_data.flatten())
+
+    return recording_data.flatten(), SAMPLE_RATE
