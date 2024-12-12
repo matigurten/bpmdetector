@@ -51,7 +51,7 @@ def analyze_audio(y, sr):
 
     return beat_frames, tempo
 
-def calculate_bpm_at_samples(y, sr, beat_frames, smoothing_factor=0.1):
+def calculate_bpm_at_samples(y, sr, beat_frames, smoothing_factor=0.1, change_threshold=1.0):
     # Create a time array for the audio signal
     duration = len(y) / sr
     time_array = np.linspace(0, duration, len(y))
@@ -61,21 +61,27 @@ def calculate_bpm_at_samples(y, sr, beat_frames, smoothing_factor=0.1):
 
     # Calculate BPM values based on detected beats
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-    
+
     for i in range(len(beat_times) - 1):
         bpm_value = (60 / (beat_times[i + 1] - beat_times[i]))  # Calculate BPM between beats
         
         # Fill the bpm_array with this value for the duration between beats
         bpm_array[(time_array >= beat_times[i]) & (time_array < beat_times[i + 1])] = bpm_value
 
-    # Apply exponential smoothing to stabilize BPM values
+    # Apply exponential smoothing to stabilize BPM values with thresholding
     smoothed_bpm_array = np.zeros_like(bpm_array)
     
-    for i in range(len(bpm_array)):
-        if i == 0:
-            smoothed_bpm_array[i] = bpm_array[i]
-        else:
-            smoothed_bpm_array[i] = (smoothing_factor * bpm_array[i]) + ((1 - smoothing_factor) * smoothed_bpm_array[i - 1])
+    smoothed_bpm_array[0] = bpm_array[0]  # Initialize first value
+
+    for i in range(1, len(bpm_array)):
+        new_bpm_value = bpm_array[i]
+        
+        # Apply smoothing based on previous smoothed value
+        smoothed_bpm_array[i] = (smoothing_factor * new_bpm_value) + ((1 - smoothing_factor) * smoothed_bpm_array[i - 1])
+
+        # Check if the change exceeds the threshold before updating the smoothed value
+        if abs(smoothed_bpm_array[i] - smoothed_bpm_array[i - 1]) < change_threshold:
+            smoothed_bpm_array[i] = smoothed_bpm_array[i - 1]  # Keep previous value if change is small
 
     return smoothed_bpm_array
 
