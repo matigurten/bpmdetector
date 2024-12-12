@@ -66,7 +66,7 @@ def calculate_bpm(y, sr, beat_frames):
     for i in range(len(beat_times) - 1):
         bpm_value = (60 / (beat_times[i + 1] - beat_times[i]))  # Calculate BPM between beats
 
-        if bpm_value > 0:  # Only consider positive BPM values
+        if bpm_value > 0 and 110 <= bpm_value <= 160:  # Only consider BPM values within range
             if not bpm_values or bpm_value != bpm_values[-1]:  # Store only if it changes
                 bpm_values.append(bpm_value)
 
@@ -99,9 +99,9 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
     plt.xticks(ticks=np.arange(0, duration + 1, step=30),
                labels=[f"{int(i // 60):02}:{int(i % 60):02}" for i in np.arange(0, duration + 1, step=30)])
 
-    plt.ylim(0, max(bpm_values) + 10)  # Set y-limits based on max BPM value
+    plt.ylim(110, 160)  # Set y-limits based on specified range
 
-    plt.legend()
+    plt.yticks(np.arange(110, 165, step=5))  # Set y-ticks every 5 BPM
 
     # Save plots as an image file with the name of the audio file + "_waveform_bpm.jpg"
     plot_filename = f"{os.path.splitext(audio_file)[0]}_waveform_bpm.jpg"
@@ -110,24 +110,22 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
 
     plt.close()
 
-def plot_fft(bpm_values):
-    """Plot FFT of BPM values."""
-    N = len(bpm_values)
-    T = 1.0 / (60.0 / np.mean(bpm_values))  # Sampling interval based on average BPM
-    yf = np.fft.fft(bpm_values)
-    xf = np.fft.fftfreq(N, T)[:N // 2]
+def plot_fft(y):
+    """Plot FFT of the waveform."""
+    N = len(y)
+    yf = np.fft.fft(y)
+    xf = np.fft.fftfreq(N, d=1/44100)[:N // 2]  # Assuming a sample rate of 44100 Hz
 
     plt.figure(figsize=(12, 6))
-    plt.plot(xf[(xf >= (110/60)) & (xf <= (160/60))],
-             np.abs(yf[:N // 2][(xf >= (110/60)) & (xf <= (160/60))]), color='b')
-    plt.title('Fourier Transform of BPM Values (110-160 BPM)')
+    plt.plot(xf[:N // 2], np.abs(yf[:N // 2]), color='b')  # Plot all frequencies
+
+    plt.title('Fourier Transform of Audio Waveform')
     plt.xlabel('Frequency (Hz)')
     plt.ylabel('Amplitude')
 
-    plt.xlim(110/60, 160/60)
-    plt.xticks(np.arange(110/60, 160/60 + (1/60), step=1/60))
+    plt.xlim(0, max(xf[:N // 2]))
 
-    fft_filename = "file_fft.jpg"
+    fft_filename = f"{os.path.splitext(audio_file)[0]}_fft.jpg"  # Updated filename format
     plt.savefig(fft_filename)
     print(f"FFT plot saved as '{fft_filename}'.")
 
@@ -173,6 +171,8 @@ if __name__ == "__main__":
 
     parser.add_argument('--url', type=str, required=True, help="YouTube video URL")
     parser.add_argument('--no-keep', action='store_true', help="Do not keep downloaded files")
+    parser.add_argument('--duration', type=int, default=10,
+                        help="Duration of real-time analysis in seconds")
 
     args = parser.parse_args()
 
@@ -188,20 +188,13 @@ if __name__ == "__main__":
 
         plot_waveform_and_bpm(y,sr,bpm_values,audio_file)
 
-        playback_duration = librosa.get_duration(y=y,sr=sr)
+        live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), args.duration)
 
-        live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), playback_duration)
-
-        plot_fft(live_bpm_values)
+        plot_fft(y)
 
         play_obj = play_audio(audio_file)
 
-        bpm_thread = threading.Thread(target=print_bpm_during_playback,
-                                      args=(librosa.frames_to_time(beat_frames,sr=sr), playback_duration))
-        bpm_thread.start()
-
         play_obj.wait_done()
-        bpm_thread.join()
 
     finally:
         pass
