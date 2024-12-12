@@ -6,10 +6,8 @@ import os
 import numpy as np
 import simpleaudio as sa
 import time
-import argparse
-import sounddevice as sd
 
-def download_youtube_audio(url):
+def download_youtube_audio(url, keep_original=False):
     # Set options for yt-dlp to download audio only
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -20,22 +18,30 @@ def download_youtube_audio(url):
         }],
         'outtmpl': '%(title)s.%(ext)s',  # Output filename template using video title
     }
-    
+
     # Extract video info to get the title before downloading
     info_dict = yt_dlp.YoutubeDL().extract_info(url, download=False)
     title = info_dict.get('title', None)
-    audio_file = f"{title}.wav"
+    audio_file_wav = f"{title}.wav"
+    audio_file_mp3 = f"{title}.mp3"
 
-    # Check if the file already exists
-    if os.path.exists(audio_file):
-        print(f"File '{audio_file}' already exists. Skipping download.")
-        return audio_file  # Return existing file name
+    # Check if the WAV or MP3 file already exists
+    if os.path.exists(audio_file_wav):
+        print(f"File '{audio_file_wav}' already exists. Skipping download.")
+        return audio_file_wav  # Return existing WAV file name
 
-    # Download audio if it does not exist
+    if os.path.exists(audio_file_mp3):
+        print(f"File '{audio_file_mp3}' already exists. Skipping download.")
+        return audio_file_mp3  # Return existing MP3 file name
+
+    # Download audio if neither file exists
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
     
-    return audio_file  # Return the filename of the downloaded audio
+    if keep_original:
+        print(f"Keeping original downloaded files.")
+
+    return audio_file_wav  # Return the filename of the downloaded audio
 
 def analyze_audio(y, sr):
     # Calculate BPM using librosa's beat detection
@@ -74,9 +80,9 @@ def plot_waveform_and_beats(y, sr, beat_frames, audio_file):
     
     plt.tight_layout()
     
-    # Save plots as an image file with the name of the audio file + "_waveform"
-    plot_filename = f"{os.path.splitext(audio_file)[0]}_waveform.png"
-    plt.savefig(plot_filename)  # Save the figure as a PNG file
+    # Save plots as an image file with the name of the audio file + "_waveform.jpg"
+    plot_filename = f"{os.path.splitext(audio_file)[0]}_waveform.jpg"
+    plt.savefig(plot_filename, format='jpg')  # Save the figure as a JPEG file
     print(f"Plots saved as '{plot_filename}'.")
     
     plt.close()  # Close the plot to free up memory
@@ -108,81 +114,27 @@ def print_bpm_during_playback(beat_times, duration):
         
         time.sleep(0.5)
 
-def record_audio(duration=10):
-    print("Recording...")
-    fs = 44100  # Sample rate
-    myrecording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
-    sd.wait()  # Wait until recording is finished
-    print("Recording finished.")
-    
-    return myrecording.flatten(), fs
-
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Analyze audio from YouTube or microphone.")
+    url = input("Enter the YouTube video URL: ")
     
-    parser.add_argument('-k', '--youtube', type=str, help="YouTube video URL")
-    
-    args = parser.parse_args()
+    keep_original = input("Do you want to keep original files? (y/n): ").strip().lower() == 'y'
 
-    if args.youtube is not None:
-        url = args.youtube.strip() or None
+    # Download audio from YouTube video or use existing WAV/MP3 file
+    audio_file = download_youtube_audio(url, keep_original)
+
+    try:
+        y, sr = librosa.load(audio_file)
+        beat_frames = analyze_audio(y, sr)
+
+        plot_waveform_and_beats(y, sr, beat_frames, audio_file)  # Save plot before playback
+
+        playback_duration = librosa.get_duration(y=y, sr=sr)  
+        play_obj = play_audio(audio_file)
         
-        if not url:  # If an empty URL is passed with -k option
-            print("No URL provided. Starting to listen through microphone...")
-            y, sr = record_audio(duration=10)  # Record for 10 seconds
-            beat_frames = analyze_audio(y, sr)
+        print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
 
-            plot_waveform_and_beats(y, sr, beat_frames, "recorded_audio.wav")  # Save plot for recorded audio
-
-            playback_duration = len(y) / sr  
-            
-            sd.play(y, sr)
-            
-            print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
-
-        else:
-            # Download audio from YouTube video or use existing file
-            audio_file = download_youtube_audio(url)
-            
-            try:
-                y, sr = librosa.load(audio_file)
-                beat_frames = analyze_audio(y, sr)
-
-                plot_waveform_and_beats(y, sr, beat_frames, audio_file)
-
-                playback_duration = librosa.get_duration(y=y, sr=sr)  
-                play_obj = play_audio(audio_file)
-                
-                print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
-
-                play_obj.wait_done()  
-                
-            finally:
-                if os.path.exists(audio_file):
-                    os.remove(audio_file)
-
-    else:
-        url_input = input("Enter the YouTube video URL: ").strip()
+        play_obj.wait_done()  
         
-        while not url_input:  # Keep asking until a valid URL is provided
-            url_input = input("You must enter a URL. Please enter the YouTube video URL: ").strip()
-
-        audio_file = download_youtube_audio(url_input)
-        
-        try:
-            y, sr = librosa.load(audio_file)
-            beat_frames = analyze_audio(y, sr)
-
-            plot_waveform_and_beats(y, sr, beat_frames, audio_file)
-
-            playback_duration = librosa.get_duration(y=y, sr=sr)  
-            play_obj = play_audio(audio_file)
-            
-            print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
-
-            play_obj.wait_done()  
-            
-        finally:
-            if os.path.exists(audio_file):
-                os.remove(audio_file)
+    finally:
+        pass  # Do not remove the WAV/MP3 file; keep it for future runs.
 
