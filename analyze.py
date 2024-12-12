@@ -11,8 +11,10 @@ import argparse
 from scipy import stats
 
 # Define constants for BPM limits and frequency analysis
-MIN_BPM = 80   # Minimum BPM for x-axis
-MAX_BPM = 200  # Maximum BPM for x-axis
+MIN_BPM_X = 80   # Minimum BPM for x-axis
+MAX_BPM_X = 200  # Maximum BPM for x-axis
+MIN_BPM_Y = 110  # Minimum BPM for y-axis
+MAX_BPM_Y = 160  # Maximum BPM for y-axis
 SAMPLE_RATE = 1000  # Sampling rate in Hz for better resolution
 
 # Define the data directory relative to the script's location
@@ -76,7 +78,7 @@ def calculate_bpm(y, sr, beat_frames):
     for i in range(len(beat_times) - 1):
         bpm_value = (60 / (beat_times[i + 1] - beat_times[i]))  # Calculate BPM between beats
 
-        if bpm_value > 0 and MIN_BPM <= bpm_value <= MAX_BPM:  # Only consider BPM values within range
+        if bpm_value > 0 and MIN_BPM_Y <= bpm_value <= MAX_BPM_Y:  # Only consider BPM values within range
             if not bpm_values or bpm_value != bpm_values[-1]:  # Store only if it changes
                 bpm_values.append(bpm_value)
 
@@ -109,9 +111,9 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
     plt.xticks(ticks=np.arange(0, duration + 1, step=30),
                labels=[f"{int(i // 60):02}:{int(i % 60):02}" for i in np.arange(0, duration + 1, step=30)])
 
-    plt.ylim(MIN_BPM, MAX_BPM)  # Set y-limits based on specified range
+    plt.ylim(MIN_BPM_Y, MAX_BPM_Y)  # Set y-limits based on specified range
 
-    plt.yticks(np.arange(MIN_BPM, MAX_BPM + 5, step=5))  # Set y-ticks every 5 BPM
+    plt.yticks(np.arange(MIN_BPM_Y, MAX_BPM_Y + 5, step=5))  # Set y-ticks every 5 BPM
 
     # Save plots as an image file with the name of the audio file + "_waveform_bpm.jpg"
     plot_filename = os.path.join(data_dir, f"{os.path.splitext(audio_file)[0]}_waveform_bpm.jpg")
@@ -121,7 +123,7 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
     plt.close()
 
 def plot_fft(y, audio_file):
-    """Plot FFT of the waveform focusing on low frequencies (1-5 Hz)."""
+    """Plot FFT of the waveform focusing on low frequencies (converted to BPM)."""
     N = len(y)
     yf = np.fft.fft(y)
     xf = np.fft.fftfreq(N, d=1/SAMPLE_RATE)[:N // 2]
@@ -132,7 +134,7 @@ def plot_fft(y, audio_file):
     bpm_values = xf * 60
 
     # Filter frequencies corresponding to desired BPM range (80-200 BPM)
-    indices = np.where((bpm_values >= MIN_BPM) & (bpm_values <= MAX_BPM))
+    indices = np.where((bpm_values >= MIN_BPM_X) & (bpm_values <= MAX_BPM_X))
 
     plt.plot(bpm_values[indices], np.abs(yf[indices]), color='b')
 
@@ -140,7 +142,7 @@ def plot_fft(y, audio_file):
     plt.xlabel('Frequency (BPM)')
     plt.ylabel('Amplitude')
 
-    plt.xlim(MIN_BPM, MAX_BPM)   # Limit x-axis to show frequencies between MIN_BPM and MAX_BPM
+    plt.xlim(MIN_BPM_X, MAX_BPM_X)   # Limit x-axis to show frequencies between MIN_BPM_X and MAX_BPM_X
 
     fft_filename = os.path.join(data_dir, f"{os.path.splitext(audio_file)[0]}_fft.jpg")
     plt.savefig(fft_filename)
@@ -166,6 +168,8 @@ def print_bpm_during_playback(beat_times, duration):
 
         recent_beats = [bt for bt in beat_times if window_start_time < bt <= elapsed_time]
 
+        current_time_seconds = int(elapsed_time)
+
         if len(recent_beats) > 1:
             bpm_count = len(recent_beats) - 1
             time_interval = recent_beats[-1] - recent_beats[0]
@@ -173,13 +177,36 @@ def print_bpm_during_playback(beat_times, duration):
             if time_interval > 0:
                 current_bpm = round((bpm_count / time_interval) * 60.0)
                 if current_bpm != last_printed_bpm:
-                    print(f'Current BPM at {int(elapsed_time)}s: {current_bpm} BPM')
+                    print(f'Current BPM at {current_time_seconds}s: {current_bpm} BPM')
                     last_printed_bpm = current_bpm
                     live_bpm_values.append(current_bpm)
+        else:
+            # Print every ten seconds even if there's no change
+            if current_time_seconds % 10 == 0 and current_time_seconds != last_printed_bpm:
+                print(f'Current BPM at {current_time_seconds}s: {last_printed_bpm} (no change)')
 
         time.sleep(1)
 
     return live_bpm_values
+
+def save_actual_bpm_plot(bpm_values, audio_file):
+    """Plot and save the actual BPM values during playback."""
+    plt.figure(figsize=(12,6))
+
+    plt.plot(bpm_values, color='g', label='Live BPM')
+
+    plt.title('Live BPM Analysis')
+    plt.xlabel('Time (Samples)')
+    plt.ylabel('BPM')
+
+    plt.ylim(MIN_BPM_Y - 10, MAX_BPM_Y + 10) # Allow some space above and below
+
+    # Save plots as an image file with the name of the audio file + "_bpm_actual.jpg"
+    actual_bpm_filename = os.path.join(data_dir, f"{os.path.splitext(audio_file)[0]}_bpm_actual.jpg")
+    plt.savefig(actual_bpm_filename)
+    print(f"Live BPM analysis saved as '{actual_bpm_filename}'.")
+
+    plt.close()
 
 def main(url):
     audio_file = download_youtube_audio(url)
@@ -201,6 +228,13 @@ def main(url):
         live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), args.duration)
 
         play_obj.wait_done()
+
+        mode_value = stats.mode(bpm_values)[0][0] if len(bpm_values) > 0 else None
+
+        if mode_value is not None:
+            print(f'Mode of BPM values: {mode_value:.2f}')
+
+        save_actual_bpm_plot(live_bpm_values, audio_file)
 
     finally:
         pass
