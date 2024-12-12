@@ -6,8 +6,9 @@ import os
 import numpy as np
 import simpleaudio as sa
 import time
+import argparse
 
-def download_youtube_audio(url, keep_original=False):
+def download_youtube_audio(url, keep_original=True):
     # Set options for yt-dlp to download audio only
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -18,29 +19,21 @@ def download_youtube_audio(url, keep_original=False):
         }],
         'outtmpl': '%(title)s.%(ext)s',  # Output filename template using video title
     }
-
+    
     # Extract video info to get the title before downloading
     info_dict = yt_dlp.YoutubeDL().extract_info(url, download=False)
     title = info_dict.get('title', None)
     audio_file_wav = f"{title}.wav"
-    audio_file_mp3 = f"{title}.mp3"
-
-    # Check if the WAV or MP3 file already exists
+    
+    # Check if the WAV file already exists
     if os.path.exists(audio_file_wav):
         print(f"File '{audio_file_wav}' already exists. Skipping download.")
         return audio_file_wav  # Return existing WAV file name
 
-    if os.path.exists(audio_file_mp3):
-        print(f"File '{audio_file_mp3}' already exists. Skipping download.")
-        return audio_file_mp3  # Return existing MP3 file name
-
-    # Download audio if neither file exists
+    # Download audio if it does not exist
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
     
-    if keep_original:
-        print(f"Keeping original downloaded files.")
-
     return audio_file_wav  # Return the filename of the downloaded audio
 
 def analyze_audio(y, sr):
@@ -56,9 +49,37 @@ def analyze_audio(y, sr):
     else:
         print('No beats detected or unable to estimate BPM.')
 
-    return beat_frames
+    return beat_frames, tempo
 
-def plot_waveform_and_beats(y, sr, beat_frames, audio_file):
+def calculate_bpm_at_samples(y, sr, beat_frames, smoothing_factor=0.1):
+    # Create a time array for the audio signal
+    duration = len(y) / sr
+    time_array = np.linspace(0, duration, len(y))
+
+    # Create an empty BPM array initialized to zero
+    bpm_array = np.zeros_like(time_array)
+
+    # Calculate BPM values based on detected beats
+    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    
+    for i in range(len(beat_times) - 1):
+        bpm_value = (60 / (beat_times[i + 1] - beat_times[i]))  # Calculate BPM between beats
+        
+        # Fill the bpm_array with this value for the duration between beats
+        bpm_array[(time_array >= beat_times[i]) & (time_array < beat_times[i + 1])] = bpm_value
+
+    # Apply exponential smoothing to stabilize BPM values
+    smoothed_bpm_array = np.zeros_like(bpm_array)
+    
+    for i in range(len(bpm_array)):
+        if i == 0:
+            smoothed_bpm_array[i] = bpm_array[i]
+        else:
+            smoothed_bpm_array[i] = (smoothing_factor * bpm_array[i]) + ((1 - smoothing_factor) * smoothed_bpm_array[i - 1])
+
+    return smoothed_bpm_array
+
+def plot_waveform_and_bpm(y, sr, bpm_array, audio_file):
     # Plotting waveform and BPM over time
     plt.figure(figsize=(12, 6))
     
@@ -67,16 +88,22 @@ def plot_waveform_and_beats(y, sr, beat_frames, audio_file):
     librosa.display.waveshow(y, sr=sr)
     plt.title('Waveform')
     
-    # Plot BPM over time if beats were detected
-    if beat_frames.size > 0:
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-        
-        plt.subplot(2, 1, 2)
-        plt.vlines(beat_times, 0, 1, color='r', alpha=0.5, label='Beats')
-        plt.title('Beat Times')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Beats')
-        plt.legend()
+    # Plot BPM(t)
+    plt.subplot(2, 1, 2)
+    time_array = np.linspace(0, len(y) / sr, len(y))
+    
+    plt.plot(time_array, bpm_array, color='r', label='BPM(t)')
+    plt.title('BPM over Time')
+    plt.xlabel('Time (s)')
+    plt.ylabel('BPM')
+    
+    # Set y-axis limits to zoom in on values between 110 and 160 BPM with a clear separation of 5 BPM
+    plt.ylim(110, 160)
+    
+    # Set y-ticks for better readability (from 110 to 160 with a step of 5)
+    plt.yticks(np.arange(110, 165, step=5))
+    
+    plt.legend()
     
     plt.tight_layout()
     
@@ -115,26 +142,80 @@ def print_bpm_during_playback(beat_times, duration):
         time.sleep(0.5)
 
 if __name__ == "__main__":
-    url = input("Enter the YouTube video URL: ")
+    parser = argparse.ArgumentParser(description="Analyze audio from YouTube or microphone.")
     
-    keep_original = input("Do you want to keep original files? (y/n): ").strip().lower() == 'y'
+    parser.add_argument('--url', type=str, help="YouTube video URL")
+    parser.add_argument('--no-keep', action='store_true', help="Do not keep downloaded files")
+    
+    args = parser.parse_args()
 
-    # Download audio from YouTube video or use existing WAV/MP3 file
-    audio_file = download_youtube_audio(url, keep_original)
-
-    try:
-        y, sr = librosa.load(audio_file)
-        beat_frames = analyze_audio(y, sr)
-
-        plot_waveform_and_beats(y, sr, beat_frames, audio_file)  # Save plot before playback
-
-        playback_duration = librosa.get_duration(y=y, sr=sr)  
-        play_obj = play_audio(audio_file)
+    if args.url:
+        url = args.url.strip()
         
-        print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
+        # Download audio from YouTube video or use existing WAV/MP3 file
+        audio_file = download_youtube_audio(url)
 
-        play_obj.wait_done()  
+        try:
+            y, sr = librosa.load(audio_file)
+            beat_frames, tempo = analyze_audio(y, sr)
+
+            bpm_array = calculate_bpm_at_samples(y, sr, beat_frames)
+
+            plot_waveform_and_bpm(y, sr, bpm_array, audio_file)  # Save plot before playback
+
+            playback_duration = librosa.get_duration(y=y, sr=sr)  
+            play_obj = play_audio(audio_file)
+            
+            print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
+
+            play_obj.wait_done()  
+            
+        finally:
+            if not args.no_keep and os.path.exists(audio_file):
+                print(f"Keeping file: {audio_file}")
+            else:
+                os.remove(audio_file)  # Remove the file if --no-keep is specified
+                
+    else:
+        url_input = input("No URL provided. Enter a YouTube video URL or press Enter to record from microphone: ").strip()
         
-    finally:
-        pass  # Do not remove the WAV/MP3 file; keep it for future runs.
+        while not url_input:  # Keep asking until a valid URL is provided or recording is chosen.
+            print("No URL provided.")
+            url_input = input("Enter a YouTube video URL or press Enter to record from microphone: ").strip()
+
+        if url_input: 
+            audio_file = download_youtube_audio(url_input)
+
+            try:
+                y, sr = librosa.load(audio_file)
+                beat_frames, tempo = analyze_audio(y, sr)
+
+                bpm_array = calculate_bpm_at_samples(y, sr, beat_frames)
+
+                plot_waveform_and_bpm(y, sr, bpm_array, audio_file)  # Save plot before playback
+
+                playback_duration = librosa.get_duration(y=y, sr=sr)  
+                play_obj = play_audio(audio_file)
+
+                print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
+
+                play_obj.wait_done()  
+
+            finally:
+                if not args.no_keep and os.path.exists(audio_file):
+                    print(f"Keeping file: {audio_file}")
+                else:
+                    os.remove(audio_file)  # Remove the file if --no-keep is specified
+
+        else:
+            y, sr = record_audio(duration=10)  # Record for 10 seconds
+            beat_frames = analyze_audio(y, sr)
+
+            plot_waveform_and_beats(y, sr, beat_frames, "recorded_audio.wav")  # Save plot for recorded audio
+
+            playback_duration = len(y) / sr  
+            
+            sd.play(y, sr)
+            
+            print_bpm_during_playback(librosa.frames_to_time(beat_frames, sr=sr), playback_duration)
 
