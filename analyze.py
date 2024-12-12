@@ -81,7 +81,6 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
     plt.figure(figsize=(12, 6))
 
     duration = len(y) / sr
-    time_array = np.linspace(0, duration, len(y))
 
     # Plot waveform
     plt.subplot(2, 1, 1)
@@ -91,7 +90,7 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
     # Plot BPM over time on the same x-axis
     plt.subplot(2, 1, 2)
 
-    plt.plot(time_array[:len(bpm_values)], bpm_values, color='r', label='BPM')
+    plt.plot(np.linspace(0, duration, len(bpm_values)), bpm_values, color='r', label='BPM')
 
     plt.title('BPM Analysis')
 
@@ -104,12 +103,33 @@ def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
 
     plt.legend()
 
-    plt.tight_layout()
-
     # Save plots as an image file with the name of the audio file + "_waveform_bpm.jpg"
     plot_filename = f"{os.path.splitext(audio_file)[0]}_waveform_bpm.jpg"
     plt.savefig(plot_filename, format='jpg')
     print(f"Plots saved as '{plot_filename}'.")
+
+    plt.close()
+
+def plot_fft(bpm_values):
+    """Plot FFT of BPM values."""
+    N = len(bpm_values)
+    T = 1.0 / (60.0 / np.mean(bpm_values))  # Sampling interval based on average BPM
+    yf = np.fft.fft(bpm_values)
+    xf = np.fft.fftfreq(N, T)[:N // 2]
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(xf[(xf >= (110/60)) & (xf <= (160/60))],
+             np.abs(yf[:N // 2][(xf >= (110/60)) & (xf <= (160/60))]), color='b')
+    plt.title('Fourier Transform of BPM Values (110-160 BPM)')
+    plt.xlabel('Frequency (Hz)')
+    plt.ylabel('Amplitude')
+
+    plt.xlim(110/60, 160/60)
+    plt.xticks(np.arange(110/60, 160/60 + (1/60), step=1/60))
+
+    fft_filename = "file_fft.jpg"
+    plt.savefig(fft_filename)
+    print(f"FFT plot saved as '{fft_filename}'.")
 
     plt.close()
 
@@ -123,6 +143,8 @@ def print_bpm_during_playback(beat_times, duration):
     last_printed_bpm = None  # Variable to track the last printed BPM value
 
     print("Calculating BPM during playback...")
+
+    live_bpm_values = []  # List to store real-time BPM values
 
     while time.time() - start_time < duration:
         elapsed_time = time.time() - start_time
@@ -140,8 +162,11 @@ def print_bpm_during_playback(beat_times, duration):
                 if current_bpm != last_printed_bpm:  # Only print when it changes
                     print(f'Current BPM at {int(elapsed_time)}s: {current_bpm} BPM')
                     last_printed_bpm = current_bpm
+                    live_bpm_values.append(current_bpm)
 
         time.sleep(1)  # Sleep for one second
+
+    return live_bpm_values
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Analyze audio from YouTube or microphone.")
@@ -164,6 +189,10 @@ if __name__ == "__main__":
         plot_waveform_and_bpm(y,sr,bpm_values,audio_file)
 
         playback_duration = librosa.get_duration(y=y,sr=sr)
+
+        live_bpm_values = print_bpm_during_playback(librosa.frames_to_time(beat_frames,sr=sr), playback_duration)
+
+        plot_fft(live_bpm_values)
 
         play_obj = play_audio(audio_file)
 
