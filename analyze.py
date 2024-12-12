@@ -57,66 +57,57 @@ def analyze_audio(y, sr):
 
     return beat_frames
 
-def calculate_bpm_with_windows(y, sr, beat_frames, windows=[1, 2, 5, 10], smoothing_factor=0.1):
-    print("Calculating BPM using different window lengths...")
-    bpm_values = []
-
+def calculate_bpm(y, sr, beat_frames):
+    """Calculate and return smoothed BPM values."""
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
 
-    for window in windows:
-        bpm_array = []
-        for i in range(len(beat_times) - 1):
-            if beat_times[i + 1] - beat_times[i] <= window:
-                bpm_value = (60 / (beat_times[i + 1] - beat_times[i]))  # Calculate BPM between beats
+    bpm_values = []
 
-                if 110 <= bpm_value <= 160:
-                    bpm_array.append(bpm_value)
+    for i in range(len(beat_times) - 1):
+        bpm_value = (60 / (beat_times[i + 1] - beat_times[i]))  # Calculate BPM between beats
 
-        if bpm_array:
-            avg_bpm = np.mean(bpm_array)
-            bpm_values.append(avg_bpm)
+        if bpm_value > 0:  # Only consider positive BPM values
+            if not bpm_values or bpm_value != bpm_values[-1]:  # Store only if it changes
+                bpm_values.append(bpm_value)
 
-    smoothed_bpm = np.zeros(len(bpm_values))
+    # Smooth the BPM values using a simple moving average or exponential smoothing
+    if len(bpm_values) > 0:
+        smoothed_bpm = np.convolve(bpm_values, np.ones(5)/5, mode='valid')  # Simple moving average
+        return smoothed_bpm
 
-    smoothed_bpm[0] = bpm_values[0]  # Initialize first value
+    return np.array([])  # Return an empty array if no BPM values were calculated
 
-    for i in range(1, len(bpm_values)):
-        smoothed_bpm[i] = (smoothing_factor * bpm_values[i]) + ((1 - smoothing_factor) * smoothed_bpm[i - 1])
-
-    final_bpm = round(smoothed_bpm[-1])  # Return rounded final value
-    print(f"Final estimated BPM after smoothing: {final_bpm}")
-
-    return final_bpm
-
-def format_time(seconds):
-    """Convert seconds into a string formatted as MM:SS."""
-    minutes = int(seconds // 60)
-    seconds = int(seconds % 60)
-    return f"{minutes:02}:{seconds:02}"
-
-def plot_waveform_and_beats(y, sr, beat_frames, audio_file):
-    print("Plotting waveform and beats...")
-
+def plot_waveform_and_bpm(y, sr, bpm_values, audio_file):
     plt.figure(figsize=(12, 6))
 
+    duration = len(y) / sr
+    time_array = np.linspace(0, duration, len(y))
+
+    # Plot waveform
     plt.subplot(2, 1, 1)
     librosa.display.waveshow(y, sr=sr)
     plt.title('Waveform')
 
-    if beat_frames.size > 0:
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+    # Plot BPM over time on the same x-axis
+    plt.subplot(2, 1, 2)
 
-        plt.subplot(2, 1, 2)
-        plt.vlines(beat_times, 0, 1, color='r', alpha=0.5, label='Beats')
-        plt.title('Beat Times')
-        plt.xlabel('Time (s)')
-        plt.ylabel('Beats')
-        plt.legend()
+    plt.plot(time_array[:len(bpm_values)], bpm_values, color='r', label='BPM')
+
+    plt.title('BPM Analysis')
+
+    plt.xlabel('Time (MM:SS)')
+
+    plt.xticks(ticks=np.arange(0, duration + 1, step=30),
+               labels=[f"{int(i // 60):02}:{int(i % 60):02}" for i in np.arange(0, duration + 1, step=30)])
+
+    plt.ylim(0, max(bpm_values) + 10)  # Set y-limits based on max BPM value
+
+    plt.legend()
 
     plt.tight_layout()
 
-    # Save plots as an image file with the name of the audio file + "_waveform.jpg"
-    plot_filename = f"{os.path.splitext(audio_file)[0]}_waveform.jpg"
+    # Save plots as an image file with the name of the audio file + "_waveform_bpm.jpg"
+    plot_filename = f"{os.path.splitext(audio_file)[0]}_waveform_bpm.jpg"
     plt.savefig(plot_filename, format='jpg')
     print(f"Plots saved as '{plot_filename}'.")
 
@@ -129,6 +120,8 @@ def play_audio(file_path):
 
 def print_bpm_during_playback(beat_times, duration):
     start_time = time.time()
+    last_printed_bpm = None  # Variable to track the last printed BPM value
+
     print("Calculating BPM during playback...")
 
     while time.time() - start_time < duration:
@@ -144,22 +137,31 @@ def print_bpm_during_playback(beat_times, duration):
 
             if time_interval > 0:
                 current_bpm = round((bpm_count / time_interval) * 60.0)
-                print(f'Current BPM at {int(elapsed_time)}s: {current_bpm} BPM')  # Truncate time and round BPM
+                if current_bpm != last_printed_bpm:  # Only print when it changes
+                    print(f'Current BPM at {int(elapsed_time)}s: {current_bpm} BPM')
+                    last_printed_bpm = current_bpm
 
-        time.sleep(1)
+        time.sleep(1)  # Sleep for one second
 
 if __name__ == "__main__":
-    url = input("Enter the YouTube video URL: ")
+    parser = argparse.ArgumentParser(description="Analyze audio from YouTube or microphone.")
 
-    keep_original = input("Do you want to keep original files? (y/n): ").strip().lower() == 'y'
+    parser.add_argument('--url', type=str, required=True, help="YouTube video URL")
+    parser.add_argument('--no-keep', action='store_true', help="Do not keep downloaded files")
 
-    audio_file = download_youtube_audio(url, keep_original)
+    args = parser.parse_args()
+
+    url = args.url.strip()
+
+    audio_file = download_youtube_audio(url, not args.no_keep)
 
     try:
         y, sr = librosa.load(audio_file)
         beat_frames = analyze_audio(y, sr)
 
-        plot_waveform_and_beats(y,sr,beat_frames,audio_file)
+        bpm_values = calculate_bpm(y,sr,beat_frames)
+
+        plot_waveform_and_bpm(y,sr,bpm_values,audio_file)
 
         playback_duration = librosa.get_duration(y=y,sr=sr)
 
@@ -174,4 +176,3 @@ if __name__ == "__main__":
 
     finally:
         pass
-
